@@ -1,0 +1,16 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Chat sessions: each session is keyed by a UUID (anonymous session)
+    // Anyone can read/write their own session documents (by sessionId)
+    // Rate limiting is enforced at the backend API level
+    match /chats/{sessionId} {
+      allow read, write: if true; // open for MVP; lock down with Auth later
+
+      match /messages/{messageId} {
+        // Allow any client to read and write messages for their session
+        allow read, write: if true;
+      }
+    }
+  }
+}

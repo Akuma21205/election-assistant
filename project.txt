@@ -1,0 +1,262 @@
+# 🗳️ AI-Powered Election Assistant (PromptWars Challenge - Google x Hack2Skill)
+
+## 📌 Project Overview
+
+This project is an AI-powered assistant designed to help users understand the election process in a clear, interactive, and personalized way. It simplifies complex election procedures, timelines, and eligibility requirements into an easy-to-follow conversational experience.
+
+The system leverages modern AI/ML techniques, including Large Language Models (LLMs), Retrieval-Augmented Generation (RAG), and agent-based orchestration to provide context-aware and dynamic responses.
+
+---
+
+## 🎯 Objective
+
+Build a smart assistant that:
+
+* Explains election processes step-by-step
+* Provides personalized guidance based on user context
+* Displays timelines and key election events
+* Ensures accuracy using verified data sources
+* Supports real-world usability and accessibility
+
+---
+
+## 🧠 Core Capabilities
+
+### 1. Personalized Election Guidance
+
+* Tailors responses based on:
+
+  * User location (country/state)
+  * First-time voter status
+* Generates a structured journey:
+
+  * Registration → Verification → Voting
+
+### 2. Context-Aware AI Assistant
+
+* Maintains conversation memory
+* Adapts responses dynamically based on user inputs
+
+### 3. Election Timeline Generator
+
+* Provides:
+
+  * Registration deadlines
+  * Voting dates
+  * Result announcements
+
+### 4. Interactive Flow-Based UI
+
+* Visual step-by-step representation of the voting process
+
+### 5. Multi-Mode Explanation
+
+* Standard Mode (detailed explanation)
+* Simplified Mode ("Explain Like I'm 10")
+
+### 6. Misinformation Detection (RAG-based)
+
+* Validates responses using trusted election data sources
+* Reduces hallucinations
+
+### 7. Voice Interaction (Optional)
+
+* Speech-to-text for user queries
+
+### 8. Multi-language Support
+
+* Supports multiple regional languages for accessibility
+
+---
+
+## 🏗️ System Architecture
+
+### High-Level Architecture
+
+Frontend (Next.js)
+↓
+Backend API (FastAPI)
+↓
+LangGraph Agent Layer
+├── LLM (Gemini API)
+├── Vector Database (RAG)
+├── PostgreSQL (structured data)
+└── Firebase (user session & memory)
+
+---
+
+### 🔁 AI Agent Workflow
+
+1. User Input
+2. Intent Classification
+
+   * Timeline Query
+   * Process Guidance
+   * Eligibility Check
+3. Context Enrichment
+
+   * User profile
+   * Location
+4. Routing Layer
+
+   * Directs query to appropriate tool
+5. Tool Execution
+
+   * Timeline Tool
+   * Registration Guide Tool
+   * FAQ Retriever (RAG)
+6. Response Generation (LLM)
+
+---
+
+## 🧰 Tech Stack
+
+### Frontend
+
+* Next.js (React)
+* TailwindCSS
+
+### Backend
+
+* FastAPI
+
+### AI/ML Layer
+
+* LangChain
+* LangGraph
+* Gemini API (Google AI)
+
+### Databases
+
+* PostgreSQL (structured election data)
+* Firebase Firestore (user data & session memory)
+
+### Vector Database
+
+* Pinecone or Chroma
+
+---
+
+## ☁️ Google Services Integration
+
+* Firebase Authentication (user login)
+* Firebase Hosting (deployment)
+* Google Cloud Functions (serverless backend)
+* Google Speech-to-Text (voice input)
+* Google Translate API (multi-language support)
+* BigQuery (optional election datasets)
+
+---
+
+## ⚙️ Functional Workflow
+
+Example Flow:
+
+User Query: "How do I vote in India?"
+
+System Actions:
+
+1. Detects user location
+2. Checks user profile (new voter or not)
+3. Retrieves:
+
+   * Registration steps
+   * Deadlines
+   * Required documents
+4. Generates structured response
+5. Optionally simplifies explanation
+
+---
+
+## ⏳ Development Timeline (5 Days)
+
+### Day 1
+
+* Setup frontend and backend
+* Configure Firebase Authentication
+* Integrate Gemini API
+
+### Day 2
+
+* Build chat interface
+* Implement basic LLM interaction
+
+### Day 3
+
+* Setup vector database (RAG)
+* Ingest election-related data
+
+### Day 4
+
+* Implement LangGraph agent
+* Add personalization logic
+* Build timeline generator
+
+### Day 5
+
+* UI/UX improvements
+* Multi-language support
+* Deployment (Firebase Hosting)
+
+---
+
+## 🧪 Testing Strategy
+
+* Unit testing for API endpoints
+* Prompt testing for edge cases
+* Manual testing with different user personas
+* Validation against incorrect or misleading queries
+
+---
+
+## 🔐 Security Considerations
+
+* Input validation for all API endpoints
+* Rate limiting for LLM usage
+* Secure authentication (Firebase Auth)
+* Prevent prompt injection attacks in RAG pipeline
+
+---
+
+## 🌍 Accessibility & Usability
+
+* Multi-language interface
+* Simple and intuitive UI
+* Beginner-friendly explanations
+* Voice input support (optional)
+
+---
+
+## 🚀 Advanced Features (Differentiators)
+
+### 1. Election Simulation Mode
+
+* Simulates the complete voting journey for a user
+
+### 2. Eligibility Checker
+
+* Determines if a user is eligible to vote
+* Provides next steps if not eligible
+
+---
+
+## 📂 Deliverables
+
+* Public GitHub Repository
+* Complete source code
+* README documentation (this file)
+* Demo-ready MVP
+
+---
+
+## 📌 Assumptions
+
+* Election data is preloaded or accessible via APIs
+* User provides basic context (location, age, etc.)
+* Focus is on guidance, not political persuasion
+
+---
+
+## 🏁 Conclusion
+
+This project demonstrates a scalable and intelligent AI assistant capable of delivering personalized, context-aware election guidance. By combining LLMs, agent-based orchestration, and Google Cloud services, the system ensures accuracy, usability, and real-world applicability.
