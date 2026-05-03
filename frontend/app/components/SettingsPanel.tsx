@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { GlobeIcon, SparkleIcon, UserIcon } from "./Icons";
 import { useTranslation } from "@/lib/TranslationContext";
 
@@ -43,6 +43,31 @@ export default function SettingsPanel({
 }: SettingsPanelProps) {
   const { t, isTranslating } = useTranslation();
   const [localLang, setLocalLang] = useState(language);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Focus trap + Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
+      'button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    focusable?.[0]?.focus();
+
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { onClose(); return; }
+      if (e.key !== "Tab" || !focusable || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+      } else {
+        if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -55,10 +80,7 @@ export default function SettingsPanel({
     <div
       style={{
         position: "absolute",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
+        top: 0, left: 0, right: 0, bottom: 0,
         zIndex: 50,
         display: "flex",
         alignItems: "center",
@@ -70,6 +92,10 @@ export default function SettingsPanel({
       onClick={onClose}
     >
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-dialog-title"
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "var(--bg-secondary)",
@@ -92,9 +118,12 @@ export default function SettingsPanel({
             marginBottom: 24,
           }}
         >
-          <h2 style={{ fontSize: 18, fontWeight: 700 }}>{t.settingsTitle}</h2>
+          <h2 id="settings-dialog-title" style={{ fontSize: 18, fontWeight: 700 }}>
+            {t.settingsTitle}
+          </h2>
           <button
             onClick={onClose}
+            aria-label="Close settings"
             style={{
               background: "var(--bg-glass)",
               border: "1px solid var(--border)",
@@ -160,11 +189,15 @@ export default function SettingsPanel({
           </label>
           <div
             style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}
+            role="group"
+            aria-label={t.languageLabel}
           >
             {LANGUAGES.map((lang) => (
               <button
                 key={lang.code}
                 onClick={() => handleLangSelect(lang.code)}
+                aria-pressed={localLang === lang.code}
+                aria-label={`Select language: ${lang.label}`}
                 style={{
                   padding: "8px 10px",
                   borderRadius: 10,
@@ -208,7 +241,11 @@ export default function SettingsPanel({
           >
             <SparkleIcon /> {t.modeLabel}
           </label>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div
+            style={{ display: "flex", gap: 8 }}
+            role="group"
+            aria-label={t.modeLabel}
+          >
             {[
               {
                 value: "standard",
@@ -224,6 +261,8 @@ export default function SettingsPanel({
               <button
                 key={opt.value}
                 onClick={() => setMode(opt.value)}
+                aria-pressed={mode === opt.value}
+                aria-label={opt.label}
                 style={{
                   flex: 1,
                   padding: "12px 14px",
@@ -287,6 +326,7 @@ export default function SettingsPanel({
               onChange={(e) =>
                 setUserContext({ ...userContext, country: e.target.value })
               }
+              aria-label={t.selectCountry}
               style={{
                 padding: "10px 14px",
                 borderRadius: 10,
@@ -311,6 +351,7 @@ export default function SettingsPanel({
               onChange={(e) =>
                 setUserContext({ ...userContext, age: e.target.value })
               }
+              aria-label={t.agePlaceholder}
               min={1}
               max={120}
               style={{

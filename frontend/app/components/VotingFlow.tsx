@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useTranslation } from "@/lib/TranslationContext";
 
 interface VotingFlowProps {
@@ -14,6 +15,7 @@ export default function VotingFlow({
   onAskAbout,
 }: VotingFlowProps) {
   const { t } = useTranslation();
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const STEPS = [
     { icon: "📋", title: t.step1Title, desc: t.step1Desc },
@@ -23,6 +25,30 @@ export default function VotingFlow({
     { icon: "🗳️", title: t.step5Title, desc: t.step5Desc },
     { icon: "📊", title: t.step6Title, desc: t.step6Desc },
   ];
+
+  // Focus trap + Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
+      'button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    focusable?.[0]?.focus();
+
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { onClose(); return; }
+      if (e.key !== "Tab" || !focusable || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+      } else {
+        if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -45,6 +71,10 @@ export default function VotingFlow({
       onClick={onClose}
     >
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="voting-flow-dialog-title"
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "var(--bg-secondary)",
@@ -65,11 +95,12 @@ export default function VotingFlow({
             marginBottom: 20,
           }}
         >
-          <h2 style={{ fontSize: 18, fontWeight: 700 }}>
+          <h2 id="voting-flow-dialog-title" style={{ fontSize: 18, fontWeight: 700 }}>
             🗳️ {t.votingJourneyTitle}
           </h2>
           <button
             onClick={onClose}
+            aria-label="Close voting journey"
             style={{
               background: "var(--bg-glass)",
               border: "1px solid var(--border)",
@@ -109,6 +140,7 @@ export default function VotingFlow({
                     `Tell me about the "${step.title}" step in the voting process. ${step.desc}`
                   );
                 }}
+                aria-label={`Ask about step ${i + 1}: ${step.title}`}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -147,6 +179,7 @@ export default function VotingFlow({
                     fontSize: 20,
                     flexShrink: 0,
                   }}
+                  aria-hidden="true"
                 >
                   {step.icon}
                 </div>
@@ -176,6 +209,7 @@ export default function VotingFlow({
                     color: "var(--text-muted)",
                     fontSize: 14,
                   }}
+                  aria-hidden="true"
                 >
                   →
                 </div>
@@ -188,6 +222,7 @@ export default function VotingFlow({
                     background: "var(--border)",
                     marginLeft: 35,
                   }}
+                  aria-hidden="true"
                 />
               )}
             </div>

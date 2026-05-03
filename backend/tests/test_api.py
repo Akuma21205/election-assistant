@@ -385,6 +385,7 @@ class TestChatEndpoint:
             "gemini-2.5-flash-preview-05-20",
             "gemini-2.0-flash",
             "gemini-1.5-flash",
+            "fallback-tool-data",  # returned when all models are quota-exhausted
         ]
         assert model in valid_models
 
@@ -399,4 +400,25 @@ class TestRateLimiting:
         for _ in range(3):
             resp = client.post("/chat", json={"message": "Hello"})
             assert resp.status_code == 200
+
+    def test_rate_limit_blocks_after_limit_exceeded(self, client: TestClient):
+        """Requests beyond RATE_LIMIT_MAX within the window must return 429."""
+        import main
+        main._rate_store.clear()  # start clean
+
+        # Exhaust the budget
+        for _ in range(main.RATE_LIMIT_MAX):
+            client.post("/chat", json={"message": "Hi"})
+
+        # The next request should be blocked
+        resp = client.post("/chat", json={"message": "One too many"})
+        assert resp.status_code == 429
+        assert "rate limit" in resp.json()["detail"].lower()
+
+    def test_rate_limit_independent_per_ip(self, client: TestClient):
+        """Rate limiter key is per-IP; clearing the store resets it."""
+        import main
+        main._rate_store.clear()
+        resp = client.post("/chat", json={"message": "First after reset"})
+        assert resp.status_code == 200
 

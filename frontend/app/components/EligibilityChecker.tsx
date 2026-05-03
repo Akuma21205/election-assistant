@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "@/lib/TranslationContext";
 import { translateText } from "@/lib/translate";
 
@@ -28,6 +28,7 @@ export default function EligibilityChecker({
   const [isResident, setIsResident] = useState(true);
   const [result, setResult] = useState<null | EligibilityResult>(null);
   const [loading, setLoading] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   // Re-translate result when language changes
   useEffect(() => {
@@ -51,6 +52,30 @@ export default function EligibilityChecker({
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [language]);
+
+  // Focus trap + Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
+      'button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    focusable?.[0]?.focus();
+
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { onClose(); return; }
+      if (e.key !== "Tab" || !focusable || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+      } else {
+        if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
 
   const checkEligibility = async () => {
     if (!age) return;
@@ -113,6 +138,10 @@ export default function EligibilityChecker({
       onClick={onClose}
     >
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="eligibility-dialog-title"
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "var(--bg-secondary)",
@@ -133,11 +162,12 @@ export default function EligibilityChecker({
             marginBottom: 20,
           }}
         >
-          <h2 style={{ fontSize: 18, fontWeight: 700 }}>
+          <h2 id="eligibility-dialog-title" style={{ fontSize: 18, fontWeight: 700 }}>
             🗳️ {t.eligibilityTitle}
           </h2>
           <button
             onClick={onClose}
+            aria-label="Close eligibility checker"
             style={{
               background: "var(--bg-glass)",
               border: "1px solid var(--border)",
@@ -171,6 +201,7 @@ export default function EligibilityChecker({
           <select
             value={country}
             onChange={(e) => setCountry(e.target.value)}
+            aria-label="Select country"
             style={{
               padding: "10px 14px",
               borderRadius: 10,
@@ -191,6 +222,7 @@ export default function EligibilityChecker({
             placeholder={t.agePlaceholder}
             value={age}
             onChange={(e) => setAge(e.target.value)}
+            aria-label={t.agePlaceholder}
             min={1}
             max={120}
             style={{
@@ -266,6 +298,8 @@ export default function EligibilityChecker({
 
         {result && (
           <div
+            role="status"
+            aria-live="polite"
             style={{
               marginTop: 16,
               padding: 16,

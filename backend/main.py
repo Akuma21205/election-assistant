@@ -12,12 +12,13 @@ Features:
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field
+from typing import List, Optional, TypedDict
 import os
 import time
 import json
 import logging
+import httpx
 from collections import defaultdict
 from google import genai
 from google.genai import types
@@ -57,6 +58,35 @@ MODELS = [
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 20  # max requests per window per IP
 _rate_store: dict[str, list[float]] = defaultdict(list)
+
+# ── Module-level constants ──────────────────────────────────────
+LANGUAGE_NAMES: dict[str, str] = {
+    "hindi": "Hindi (हिन्दी)",
+    "spanish": "Spanish (Español)",
+    "french": "French (Français)",
+    "tamil": "Tamil (தமிழ்)",
+    "telugu": "Telugu (తెలుగు)",
+    "bengali": "Bengali (বাংলা)",
+    "marathi": "Marathi (मराठी)",
+    "kannada": "Kannada (ಕನ್ನಡ)",
+}
+
+WAVENET_VOICES: dict[str, str] = {
+    "en-US": "en-US-Wavenet-D",
+    "en-GB": "en-GB-Wavenet-B",
+    "hi-IN": "hi-IN-Wavenet-B",
+    "es-ES": "es-ES-Wavenet-B",
+    "fr-FR": "fr-FR-Wavenet-B",
+    "ta-IN": "ta-IN-Wavenet-B",
+    "te-IN": "te-IN-Wavenet-B",
+    "bn-IN": "bn-IN-Wavenet-B",
+    "mr-IN": "mr-IN-Wavenet-C",
+    "kn-IN": "kn-IN-Wavenet-B",
+}
+
+TRANSLATE_URL = "https://translation.googleapis.com/language/translate/v2"
+STT_URL = "https://speech.googleapis.com/v1/speech:recognize"
+TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
 
 
 def check_rate_limit(client_ip: str) -> bool:
@@ -131,7 +161,7 @@ class Message(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=4000)
     history: List[Message] = []
     language: str = "english"
     mode: str = "standard"  # "standard" or "simplified"
@@ -150,9 +180,20 @@ class TimelineRequest(BaseModel):
     year: str = "2024"
 
 
+# ── TypedDicts for structured return types ────────────────────
+
+class AgentResult(TypedDict):
+    response: str
+    model_used: str
+    intent: str
+    country_detected: Optional[str]
+    tools_used: list[str]
+    rag_results_count: int
+
+
 # ── Intent Classification ─────────────────────────────────────
 
-INTENT_KEYWORDS = {
+INTENT_KEYWORDS: dict[str, list[str]] = {
     "timeline": ["timeline", "when", "date", "schedule", "deadline", "calendar", "upcoming", "phases"],
     "eligibility": ["eligible", "eligibility", "can i vote", "am i eligible", "qualify", "requirements", "age limit", "who can vote"],
     "registration": ["register", "registration", "sign up", "enroll", "how to register", "voter id", "form 6"],
@@ -164,7 +205,7 @@ INTENT_KEYWORDS = {
 def classify_intent(message: str) -> str:
     """Classify user intent based on keywords."""
     msg_lower = message.lower()
-    scores = {}
+    scores: dict[str, int] = {}
     for intent, keywords in INTENT_KEYWORDS.items():
         score = sum(1 for kw in keywords if kw in msg_lower)
         if score > 0:
@@ -181,10 +222,11 @@ def detect_country(message: str, user_context: dict | None = None) -> str | None
         return user_context["country"]
 
     msg_lower = message.lower()
-    country_keywords = {
+    country_keywords: dict[str, list[str]] = {
         "india": ["india", "indian", "bharat", "lok sabha", "eci", "evm", "vvpat", "nota", "nri"],
         "usa": ["usa", "us", "america", "american", "electoral college", "congress", "senate", "midterm", "democrat", "republican"],
-        "uk": ["uk", "britain", "british", "parliament", "mp", "commons", "house of lords", "england", "scotland", "wales"],
+        "uk": ["uk", "britain", "british", "parliament", "mp", "commons", "house of lords",
+               "england", "scotland", "wales", "northern ireland", "devolved", "holyrood", "senedd"],
     }
     for country, keywords in country_keywords.items():
         if any(kw in msg_lower for kw in keywords):
@@ -289,7 +331,13 @@ def format_eligibility_result(result: dict) -> str:
 
 # ── Agent Orchestration ────────────────────────────────────────
 
-def run_agent(message: str, history: list, language: str, mode: str, user_context: dict | None) -> dict:
+def run_agent(
+    message: str,
+    history: list,
+    language: str,
+    mode: str,
+    user_context: dict | None,
+) -> AgentResult:
     """
     Main agent orchestration:
     1. Classify intent
@@ -300,7 +348,7 @@ def run_agent(message: str, history: list, language: str, mode: str, user_contex
     """
     intent = classify_intent(message)
     country = detect_country(message, user_context)
-    tool_outputs = []
+    tool_outputs: list[str] = []
     rag_context = ""
 
     logger.info(f"Intent: {intent}, Country: {country}, Mode: {mode}, Language: {language}")
@@ -331,16 +379,6 @@ def run_agent(message: str, history: list, language: str, mode: str, user_contex
     system = SIMPLIFIED_SYSTEM_PROMPT if mode == "simplified" else SYSTEM_PROMPT
 
     # Language instruction — native language enforcement
-    LANGUAGE_NAMES = {
-        "hindi": "Hindi (हिन्दी)",
-        "spanish": "Spanish (Español)",
-        "french": "French (Français)",
-        "tamil": "Tamil (தமிழ்)",
-        "telugu": "Telugu (తెలుగు)",
-        "bengali": "Bengali (বাংলা)",
-        "marathi": "Marathi (मराठी)",
-        "kannada": "Kannada (ಕನ್ನಡ)",
-    }
     if language and language.lower() != "english":
         lang_name = LANGUAGE_NAMES.get(language.lower(), language.capitalize())
         system += (
@@ -408,14 +446,14 @@ Always cite official sources where applicable."""
                 raise ValueError("Empty response from model.")
 
             logger.info(f"✅ Success with model: {model_id}")
-            return {
-                "response": response.text.strip(),
-                "model_used": model_id,
-                "intent": intent,
-                "country_detected": country,
-                "tools_used": [t[:50] for t in tool_outputs] if tool_outputs else [],
-                "rag_results_count": len(rag_results),
-            }
+            return AgentResult(
+                response=response.text.strip(),
+                model_used=model_id,
+                intent=intent,
+                country_detected=country,
+                tools_used=[t[:50] for t in tool_outputs] if tool_outputs else [],
+                rag_results_count=len(rag_results),
+            )
 
         except Exception as e:
             err_str = str(e)
@@ -426,9 +464,41 @@ Always cite official sources where applicable."""
                 continue
             raise HTTPException(status_code=500, detail=f"AI error ({model_id}): {err_str}")
 
-    raise HTTPException(
-        status_code=429,
-        detail="API quota exhausted on all available models. Please wait a minute and try again.",
+    # ── Graceful no-LLM fallback ──────────────────────────────────────────────
+    # All Gemini models are quota-exhausted. Return tool + RAG data directly
+    # so the user always gets a useful, structured answer.
+    logger.warning("All models quota-exhausted — returning tool/RAG fallback response.")
+
+    fallback_parts = []
+
+    if tool_outputs:
+        fallback_parts.extend(tool_outputs)
+    elif rag_results:
+        fallback_parts.append("## 📚 Information from Knowledge Base\n")
+        for r in rag_results[:3]:
+            fallback_parts.append(r["content"])
+    else:
+        fallback_parts.append(
+            "I'm currently experiencing high demand and my AI models are temporarily unavailable. "
+            "Here are some quick resources:\n\n"
+            "- **India**: Visit [voters.eci.gov.in](https://voters.eci.gov.in) for registration\n"
+            "- **USA**: Visit [vote.gov](https://vote.gov) for voter registration\n"
+            "- **UK**: Visit [gov.uk/register-to-vote](https://www.gov.uk/register-to-vote) for registration\n\n"
+            "Please try again in a minute for a personalized AI response."
+        )
+
+    fallback_note = (
+        "\n\n---\n*⚠️ AI model temporarily at capacity. Showing verified data directly. "
+        "Please try again in ~60 seconds for a full AI response.*"
+    )
+
+    return AgentResult(
+        response="\n\n".join(fallback_parts) + fallback_note,
+        model_used="fallback-tool-data",
+        intent=intent,
+        country_detected=country,
+        tools_used=[t[:50] for t in tool_outputs] if tool_outputs else [],
+        rag_results_count=len(rag_results),
     )
 
 
@@ -496,6 +566,7 @@ def get_timeline(country: str, year: str = "2024"):
         "country": data["country"],
         "timeline": data.get("timelines", {}),
         "election_types": data.get("election_types", []),
+        "registration_deadline": data.get("registration", {}).get("deadline"),
     }
 
 
@@ -527,13 +598,7 @@ def get_registration(country: str):
 
 # ── Google Cloud API Proxy (server-side key — never exposed to browser) ────────
 
-import httpx
-
 GOOGLE_API_KEY = os.getenv("GOOGLE_CLOUD_API_KEY", "")
-
-TRANSLATE_URL = "https://translation.googleapis.com/language/translate/v2"
-STT_URL = "https://speech.googleapis.com/v1/speech:recognize"
-TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
 
 
 class TranslateProxyRequest(BaseModel):
@@ -630,19 +695,6 @@ def proxy_tts(req: TTSProxyRequest, request: Request):
     if not check_rate_limit(client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded.")
 
-    # Auto-select best Wavenet voice for language
-    WAVENET_VOICES: dict[str, str] = {
-        "en-US": "en-US-Wavenet-D",
-        "en-GB": "en-GB-Wavenet-B",
-        "hi-IN": "hi-IN-Wavenet-B",
-        "es-ES": "es-ES-Wavenet-B",
-        "fr-FR": "fr-FR-Wavenet-B",
-        "ta-IN": "ta-IN-Wavenet-B",
-        "te-IN": "te-IN-Wavenet-B",
-        "bn-IN": "bn-IN-Wavenet-B",
-        "mr-IN": "mr-IN-Wavenet-C",
-        "kn-IN": "kn-IN-Wavenet-B",
-    }
     voice_name = req.voice_name or WAVENET_VOICES.get(req.language_code, "")
 
     voice_payload: dict = {"languageCode": req.language_code}

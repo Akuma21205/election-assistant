@@ -236,26 +236,39 @@ prompt-to-war-2nd-challenge/
 │   ├── rag.py               # RAG engine with ChromaDB
 │   ├── pyproject.toml       # Python dependencies (uv)
 │   ├── Dockerfile           # Container definition
-│   └── .env.example         # Environment variable template
+│   ├── .env.example         # Environment variable template
+│   └── tests/
+│       ├── test_api.py      # Integration tests for all API endpoints
+│       ├── test_agent.py    # Unit tests for agent orchestration logic
+│       └── test_proxy.py    # Unit tests for Google Cloud API proxies
 ├── frontend/
+│   ├── __tests__/
+│   │   └── speech.test.ts   # Frontend utility tests (jest)
 │   ├── app/
-│   │   ├── page.tsx          # Main chat UI (STT/TTS integrated)
+│   │   ├── page.tsx          # Main chat UI (hooks + components composed)
 │   │   ├── layout.tsx        # Root layout + SEO meta tags
 │   │   ├── globals.css       # Design system + keyframe animations
 │   │   └── components/
 │   │       ├── Icons.tsx             # SVG icon components
-│   │       ├── SettingsPanel.tsx     # Language/mode/profile settings
-│   │       ├── EligibilityChecker.tsx # Eligibility form + translated results
-│   │       └── VotingFlow.tsx        # Visual 6-step voting journey
+│   │       ├── MessageBubble.tsx     # Single chat message with TTS button
+│   │       ├── TypingIndicator.tsx   # Animated three-dot loading indicator
+│   │       ├── SettingsPanel.tsx     # Language/mode/profile settings (ARIA dialog)
+│   │       ├── EligibilityChecker.tsx # Eligibility form (ARIA dialog + focus trap)
+│   │       └── VotingFlow.tsx        # Visual 6-step voting journey (ARIA dialog)
 │   ├── lib/
 │   │   ├── firebase.ts           # Firebase client init
 │   │   ├── uiStrings.ts          # All UI strings (English source of truth)
 │   │   ├── translate.ts          # Google Translate API + in-memory cache
 │   │   ├── TranslationContext.tsx # React context for translated UI
-│   │   └── speech.ts             # Google STT + TTS utilities
+│   │   ├── speech.ts             # Google STT + TTS utilities
+│   │   └── hooks/
+│   │       ├── useChat.ts        # Firestore sync + sendMessage hook
+│   │       └── useSpeech.ts      # STT recording + TTS playback hook
 │   └── .env.local.example        # Frontend env var template
+├── docs/
+│   └── architecture.md       # System architecture + component reference
 ├── firebase.json             # Firebase Hosting + Firestore config
-├── firestore.rules           # Firestore security rules
+├── firestore.rules           # Hardened Firestore security rules
 └── README.md                 # This file
 ```
 
@@ -362,12 +375,13 @@ docker run -p 8000:8000 --env-file .env voteguide-backend
 ## 🔐 Security
 
 - **Rate Limiting** — 20 requests/minute per IP (in-memory sliding window)
-- **Input Validation** — Pydantic models validate all request bodies
+- **Input Validation** — Pydantic models validate all request bodies with `Field(max_length=4000)`
 - **CORS** — Whitelisted origins only; Firebase Hosting domains allowed via regex
 - **Non-partisan Guardrails** — System prompt explicitly prohibits political bias or candidate promotion
 - **Prompt Injection Defense** — RAG context is clearly delimited and labelled
-- **Firestore Rules** — Users can only read/write their own session's messages
+- **Firestore Rules** — Create-only writes with field validation (role must be `user`/`assistant`, content < 10,000 chars); no updates or deletes
 - **No PII Storage** — Only session ID (UUID) and chat content stored; no user authentication required
+- **Server-side API keys** — All Google Cloud API calls are proxied through the backend; keys never exposed to the browser
 
 ---
 
