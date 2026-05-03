@@ -10,31 +10,35 @@ This document describes the technical architecture of VoteGuide — the AI-power
 ┌──────────────────────────────────────────────────────┐
 │                    FRONTEND                          │
 │  Next.js 16 + React 19 + TypeScript                  │
+│  ErrorBoundary + TranslationProvider wrappers        │
 │                                                      │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────┐  │
 │  │ Translation │  │ Speech (STT) │  │ TTS Player │  │
-│  │  Context    │  │  MediaRec +  │  │  Wavenet   │  │
-│  │  (9 langs)  │  │  Google STT  │  │  MP3 audio │  │
+│  │  Context    │  │  via backend │  │  via backend│  │
+│  │  (9 langs)  │  │  /api/stt    │  │  /api/tts  │  │
 │  └──────┬──────┘  └──────┬───────┘  └─────┬──────┘  │
 │         │                │                │          │
-│  Google Cloud Translation API   Google Cloud TTS/STT │
-│                                                      │
 │  Firebase Firestore ←→ Real-time chat history        │
 └──────────────────────┬───────────────────────────────┘
-                       │ POST /chat (fetch)
+                       │ POST /chat  (or /chat/stream SSE)
 ┌──────────────────────▼───────────────────────────────┐
-│                    BACKEND                           │
+│                    BACKEND (modular service layer)   │
 │  FastAPI + Python 3.12                               │
 │                                                      │
-│  ┌──────────────┐  ┌───────────────┐                 │
-│  │   Intent     │  │  Tool Layer   │                 │
-│  │  Classifier  │  │  • Timeline   │                 │
-│  │  (keyword)   │  │  • Eligibility│                 │
-│  │              │  │  • Reg. Guide │                 │
-│  └──────┬───────┘  └───────┬───────┘                 │
+│  ┌──────────────┐  ┌───────────────┐  ┌──────────┐  │
+│  │  intent.py   │  │   tools.py    │  │models.py │  │
+│  │  Classifier  │  │  • Timeline   │  │ Pydantic │  │
+│  │  + Country   │  │  • Eligibility│  │ schemas  │  │
+│  │  Detection   │  │  • Reg. Guide │  │          │  │
+│  └──────┬───────┘  └───────┬───────┘  └──────────┘  │
 │         │                  │                         │
 │  ┌──────▼──────────────────▼───────┐                 │
-│  │         RAG Engine (ChromaDB)   │                 │
+│  │  agent.py (orchestration)       │                 │
+│  │  LRU cache + model fallback     │                 │
+│  └──────────────────┬──────────────┘                 │
+│                     │                                │
+│  ┌──────────────────▼──────────────┐                 │
+│  │   RAG Engine (rag.py + ChromaDB)│                 │
 │  │   semantic search → top-3 docs  │                 │
 │  └──────────────────┬──────────────┘                 │
 │                     │                                │
@@ -42,6 +46,8 @@ This document describes the technical architecture of VoteGuide — the AI-power
 │  │   Gemini API (fallback chain)   │                 │
 │  │  2.5 Flash → 2.0 → 1.5 Flash   │                 │
 │  └─────────────────────────────────┘                 │
+│                                                      │
+│  middleware.py — Rate limiting, tracing, sanitization │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -49,19 +55,22 @@ This document describes the technical architecture of VoteGuide — the AI-power
 
 ## 3-Layer Intelligence Stack
 
-### Layer 1 — Intent Classification
+### Layer 1 — Intent Classification (`intent.py`)
 
-Keyword-based classifier routes user queries to one of five intents:
+Keyword-based classifier routes user queries to one of six intents:
 
 | Intent | Keywords |
 |--------|----------|
-| `timeline` | when, date, schedule, deadline, calendar |
-| `eligibility` | eligible, qualify, requirements, age limit |
-| `registration` | register, sign up, enroll, voter id |
-| `process` | how to vote, steps, procedure, ballot |
+| `timeline` | when, date, schedule, deadline, calendar, upcoming |
+| `eligibility` | eligible, qualify, requirements, age limit, who can vote |
+| `registration` | register, sign up, enroll, voter id, form 6 |
+| `process` | how to vote, steps, procedure, ballot, polling |
+| `explanation` | what is, explain, define, meaning of, describe |
 | `general` | (fallback — no strong match) |
 
-### Layer 2 — Tool Execution
+Country detection (`detect_country`) identifies India/USA/UK from keywords or `user_context`.
+
+### Layer 2 — Tool Execution (`tools.py`)
 
 Based on the detected intent + country, one of these structured tools runs:
 
@@ -71,12 +80,14 @@ Based on the detected intent + country, one of these structured tools runs:
 | `get_registration_guide()` | Steps, documents, portal links |
 | `get_voting_process()` | Step-by-step voting instructions |
 | `format_eligibility_result()` | Eligibility decision + next steps |
+| `execute_tools()` | Centralized dispatcher routing intent → tool |
 
-### Layer 3 — RAG + LLM
+### Layer 3 — RAG + LLM (`agent.py`)
 
 1. **ChromaDB** performs semantic vector search over `election_data.py` (top-3 results)
 2. Tool output + RAG context are injected into the system prompt
 3. **Gemini** generates the final response with language enforcement
+4. LRU cache (128 entries, 5-min TTL) deduplicates identical stateless queries
 
 ---
 
@@ -85,36 +96,44 @@ Based on the detected intent + country, one of these structured tools runs:
 ```
 User speaks / types
         │
-        ▼ (optional) MediaRecorder → POST /api/stt → Google Cloud STT → transcript
+        ▼ (optional) MediaRecorder → POST /api/stt → Backend proxy → Google Cloud STT → transcript
         │
         ▼ User types or paste transcript into chat input
         │
-        ▼ POST /chat { message, language, mode, user_context, history }
+        ▼ POST /chat (or POST /chat/stream for SSE)
+        │  { message, language, mode, user_context, history }
         │
-        ▼ Rate limit check (20 req/min per IP, in-memory sliding window)
+        ▼ middleware.py: X-Request-ID + timing + rate limit (20 req/min per IP)
         │
-        ▼ Intent Classification (keyword scoring)
+        ▼ middleware.py: sanitize_chat_input (prompt injection defense)
         │
-        ▼ Country Detection (keywords + user_context)
+        ▼ intent.py: classify_intent (keyword scoring)
         │
-        ▼ Tool Execution (structured election data → formatted markdown)
+        ▼ intent.py: detect_country (keywords + user_context)
         │
-        ▼ RAG Search (ChromaDB, top-3 semantic matches, filtered by country)
+        ▼ tools.py: execute_tools (structured election data → formatted markdown)
         │
-        ▼ Prompt Assembly (system + language enforcement + tool output + RAG + message)
+        ▼ rag.py: search (ChromaDB, top-3 semantic matches, filtered by country)
         │
-        ▼ Gemini API (2.5 Flash → 2.0 Flash → 1.5 Flash fallback on 429/404)
+        ▼ agent.py: Prompt assembly + Gemini API (fallback chain)
         │
         ▼ Response saved to Firebase Firestore (real-time sync to client)
         │
-        ▼ Rendered as MessageBubble in chat UI
+        ▼ Rendered as MessageBubble with markdown formatting in chat UI
         │
-        ▼ (optional) POST /api/tts → Google Cloud TTS → Wavenet MP3 plays
+        ▼ (optional) POST /api/tts → Backend proxy → Google Cloud TTS → MP3 plays
 ```
 
 ---
 
 ## Frontend Architecture
+
+### Providers (Root Layout)
+
+| Provider | Responsibility |
+|----------|---------------|
+| `ErrorBoundary` | Catches render crashes, shows recovery UI |
+| `TranslationProvider` | Provides `t()` translation function to entire component tree |
 
 ### Hooks (Custom React Hooks)
 
@@ -128,11 +147,13 @@ User speaks / types
 | Component | Responsibility |
 |-----------|---------------|
 | `page.tsx` | Root composition — assembles all hooks + components (~300 lines) |
-| `MessageBubble` | Single chat message with TTS play button |
+| `MessageBubble` | Chat message with custom markdown renderer + TTS play button |
 | `TypingIndicator` | Animated three-dot loader with `role="status"` |
 | `SettingsPanel` | Language, mode, profile settings modal (ARIA dialog) |
 | `EligibilityChecker` | Eligibility form modal (ARIA dialog, focus trap) |
 | `VotingFlow` | 6-step voting journey modal (ARIA dialog, focus trap) |
+| `ErrorBoundary` | Class-based React error boundary with retry |
+| `Icons` | Reusable SVG icon components |
 
 ### Accessibility (WCAG 2.1 AA)
 
@@ -146,27 +167,40 @@ User speaks / types
 
 ---
 
-## Backend Architecture
+## Backend Architecture (Modular Service Layer)
 
 ### Module Layout
 
 | File | Responsibility |
 |------|---------------|
-| `main.py` | FastAPI app, agent orchestration (`run_agent`), all endpoints |
+| `main.py` | FastAPI app, thin routing layer, Google Cloud API proxies |
+| `agent.py` | Agent orchestration: intent → tools → RAG → LLM, LRU cache, model fallback |
+| `intent.py` | Intent classification and country detection (keyword scoring) |
+| `tools.py` | Structured election data tools + centralized `execute_tools()` dispatcher |
+| `models.py` | All Pydantic request/response schemas and TypedDicts |
+| `middleware.py` | Request tracing, timing headers, rate limiting, input sanitization |
 | `election_data.py` | Structured election data for India, USA, UK |
 | `rag.py` | ChromaDB initialization and semantic search |
+| `Dockerfile` | Multi-stage build with non-root user + HEALTHCHECK |
+| `tests/conftest.py` | Shared fixtures, mocked Gemini client, rate-limit reset |
 | `tests/test_api.py` | Integration tests for all API endpoints |
 | `tests/test_agent.py` | Unit tests for agent logic (intent, tools, orchestration) |
 | `tests/test_proxy.py` | Unit tests for Google Cloud API proxy endpoints |
+| `tests/test_election_data.py` | Unit tests for election data, eligibility, RAG |
 
 ### Key Constants (Module-Level)
 
 ```python
+# agent.py
 MODELS = ["gemini-2.5-flash-preview-05-20", "gemini-2.0-flash", "gemini-1.5-flash"]
-RATE_LIMIT_MAX = 20       # requests per window
-RATE_LIMIT_WINDOW = 60    # seconds
-LANGUAGE_NAMES = {...}    # language code → display name
-WAVENET_VOICES = {...}    # BCP-47 → Wavenet voice name
+CACHE_MAX_SIZE = 128          # LRU cache entries
+CACHE_TTL_SECONDS = 300       # 5-minute cache expiry
+MAX_HISTORY_TURNS = 20        # conversation context limit
+
+# middleware.py
+RATE_LIMIT_MAX = 20           # requests per window per IP
+RATE_LIMIT_WINDOW = 60        # sliding window in seconds
+INJECTION_PATTERNS = [...]    # compiled regex patterns for prompt injection defense
 ```
 
 ### TypedDicts for Typed Returns
@@ -187,8 +221,10 @@ class AgentResult(TypedDict):
 
 | Layer | Mechanism |
 |-------|-----------|
-| Rate limiting | 20 req/min per IP (in-memory sliding window) |
-| Input validation | Pydantic models with `Field(max_length=4000)` |
+| Rate limiting | 20 req/min per IP (in-memory sliding window, `middleware.py`) |
+| Input sanitization | Regex-based prompt injection detection (`middleware.py`) |
+| Request tracing | `X-Request-ID` + `X-Response-Time` headers (`middleware.py`) |
+| Input validation | Pydantic models with `Field(max_length=4000)` (`models.py`) |
 | CORS | Explicit allowlist + Firebase Hosting regex |
 | API keys | All Google API calls proxied server-side; keys never in browser |
 | Firestore rules | `create`-only with field validation; no update/delete |

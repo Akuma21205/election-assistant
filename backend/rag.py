@@ -97,11 +97,15 @@ def _flatten_country_data(country_key: str, data: dict) -> list[dict]:
     return docs
 
 
-def initialize_rag():
-    """Load all election data into ChromaDB for semantic search."""
+def initialize_rag() -> int:
+    """Load all election data into ChromaDB for semantic search.
+
+    Returns:
+        Number of documents indexed.
+    """
     global _initialized
     if _initialized:
-        return
+        return collection.count()
 
     all_docs = []
 
@@ -127,6 +131,7 @@ def initialize_rag():
         logger.info(f"✅ RAG initialized with {len(all_docs)} documents")
 
     _initialized = True
+    return len(all_docs)
 
 
 def search(query: str, n_results: int = 5, country: str | None = None) -> list[dict]:

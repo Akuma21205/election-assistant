@@ -122,6 +122,7 @@ export default function Home() {
 
   return (
     <main
+      id="main-content"
       style={{
         display: "flex",
         flexDirection: "column",

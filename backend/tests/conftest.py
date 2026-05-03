@@ -28,8 +28,8 @@ def mock_gemini():
     mock_client.models.generate_content.return_value = mock_response
 
     with patch("main.client", mock_client), \
-         patch("main.initialize_rag"), \
-         patch("main.rag_search", return_value=[
+         patch("main.initialize_rag", return_value=42), \
+         patch("agent.rag_search", return_value=[
              {"content": "Test RAG context about elections.", "metadata": {}, "relevance_score": 0.9}
          ]):
         from main import app

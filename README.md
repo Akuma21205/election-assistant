@@ -99,21 +99,29 @@ User speaks / types
 
 ### Key Components
 
-#### Backend (`FastAPI` + Python 3.12)
+#### Backend (`FastAPI` + Python 3.12 — Modular Service Layer)
 | File | Responsibility |
 |------|----------------|
-| `main.py` | API server, agent orchestration, intent classification, LLM calls |
+| `main.py` | Thin routing layer, Google Cloud API proxies, CORS, lifespan |
+| `agent.py` | Agent orchestration: intent → tools → RAG → LLM, LRU cache, model fallback |
+| `intent.py` | Intent classification and country detection (keyword scoring) |
+| `tools.py` | Structured election data tools + centralized `execute_tools()` dispatcher |
+| `models.py` | All Pydantic request/response schemas and TypedDicts |
+| `middleware.py` | Request tracing (`X-Request-ID`), timing, rate limiting, input sanitization |
 | `election_data.py` | Comprehensive structured election data for India, USA, UK |
 | `rag.py` | ChromaDB vector store — ingests and searches election knowledge base |
 
 #### Frontend (`Next.js 16` + TypeScript)
 | File | Responsibility |
 |------|----------------|
+| `app/layout.tsx` | Root layout with `ErrorBoundary` + `TranslationProvider` wrappers |
 | `app/page.tsx` | Main chat UI with STT/TTS integration |
 | `lib/translate.ts` | Google Cloud Translation API with in-memory caching |
-| `lib/speech.ts` | Google Cloud STT (MediaRecorder → API) + TTS (Wavenet voices) |
+| `lib/speech.ts` | Google Cloud STT + TTS utilities (backend-proxied) |
 | `lib/TranslationContext.tsx` | React context — translates all UI strings app-wide |
 | `lib/uiStrings.ts` | Single source of truth for all 100+ English UI strings |
+| `components/MessageBubble.tsx` | Chat message with custom markdown renderer + TTS button |
+| `components/ErrorBoundary.tsx` | Class-based React error boundary with retry UI |
 | `components/SettingsPanel.tsx` | Language, mode, and profile configuration |
 | `components/EligibilityChecker.tsx` | Interactive eligibility form with translated results |
 | `components/VotingFlow.tsx` | Visual step-by-step voting journey |
@@ -231,27 +239,35 @@ User speaks / types
 ```
 prompt-to-war-2nd-challenge/
 ├── backend/
-│   ├── main.py              # FastAPI server + agent orchestration
+│   ├── main.py              # Thin routing layer + Google Cloud API proxies
+│   ├── agent.py             # Agent orchestration (intent → tools → RAG → LLM)
+│   ├── intent.py            # Intent classification + country detection
+│   ├── tools.py             # Structured data tools + execute_tools() dispatcher
+│   ├── models.py            # Pydantic request/response schemas + TypedDicts
+│   ├── middleware.py        # Rate limiting, request tracing, input sanitization
 │   ├── election_data.py     # Structured election data (India/USA/UK)
 │   ├── rag.py               # RAG engine with ChromaDB
 │   ├── pyproject.toml       # Python dependencies (uv)
-│   ├── Dockerfile           # Container definition
+│   ├── Dockerfile           # Multi-stage container with non-root user
 │   ├── .env.example         # Environment variable template
 │   └── tests/
-│       ├── test_api.py      # Integration tests for all API endpoints
-│       ├── test_agent.py    # Unit tests for agent orchestration logic
-│       └── test_proxy.py    # Unit tests for Google Cloud API proxies
+│       ├── conftest.py          # Shared fixtures + mocked Gemini client
+│       ├── test_api.py          # Integration tests for all 11 API endpoints
+│       ├── test_agent.py        # Unit tests for agent orchestration logic
+│       ├── test_proxy.py        # Unit tests for Google Cloud API proxies
+│       └── test_election_data.py # Unit tests for election data + RAG
 ├── frontend/
 │   ├── __tests__/
 │   │   └── speech.test.ts   # Frontend utility tests (jest)
 │   ├── app/
 │   │   ├── page.tsx          # Main chat UI (hooks + components composed)
-│   │   ├── layout.tsx        # Root layout + SEO meta tags
+│   │   ├── layout.tsx        # Root layout + ErrorBoundary + TranslationProvider
 │   │   ├── globals.css       # Design system + keyframe animations
 │   │   └── components/
 │   │       ├── Icons.tsx             # SVG icon components
-│   │       ├── MessageBubble.tsx     # Single chat message with TTS button
+│   │       ├── MessageBubble.tsx     # Chat message with markdown renderer + TTS
 │   │       ├── TypingIndicator.tsx   # Animated three-dot loading indicator
+│   │       ├── ErrorBoundary.tsx     # React error boundary with retry UI
 │   │       ├── SettingsPanel.tsx     # Language/mode/profile settings (ARIA dialog)
 │   │       ├── EligibilityChecker.tsx # Eligibility form (ARIA dialog + focus trap)
 │   │       └── VotingFlow.tsx        # Visual 6-step voting journey (ARIA dialog)
@@ -325,8 +341,10 @@ docker run -p 8000:8000 --env-file .env voteguide-backend
 ### Backend (`backend/.env`)
 | Variable | Description |
 |----------|-------------|
-| `GEMINI_API_KEY` | Google AI Studio API key |
-| `ALLOWED_ORIGINS` | Comma-separated CORS origins (default: localhost:3000) |
+| `GEMINI_API_KEY` | Google AI Studio API key (also used as fallback for Cloud APIs) |
+| `GOOGLE_CLOUD_API_KEY` | Google Cloud API key for Translation, STT, TTS proxies |
+| `GOOGLE_TRANSLATE_API_KEY` | (Optional) Separate key for Translation API |
+| `ALLOWED_ORIGINS` | Comma-separated CORS origins (default: `http://localhost:3000`) |
 
 ### Frontend (`frontend/.env.local`)
 | Variable | Description |
@@ -337,8 +355,9 @@ docker run -p 8000:8000 --env-file .env voteguide-backend
 | `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | Firebase storage bucket |
 | `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | Firebase messaging sender ID |
 | `NEXT_PUBLIC_FIREBASE_APP_ID` | Firebase app ID |
-| `NEXT_PUBLIC_API_URL` | Backend API URL (default: http://127.0.0.1:8000) |
-| `NEXT_PUBLIC_GOOGLE_TRANSLATE_API_KEY` | Google Cloud API key (Translation + STT + TTS) |
+| `NEXT_PUBLIC_API_URL` | Backend API URL (default: `http://127.0.0.1:8000`) |
+
+> **Note:** All Google Cloud API keys (Translation, STT, TTS) are stored server-side in `backend/.env` only. No API keys are exposed to the browser.
 
 ---
 
@@ -346,13 +365,17 @@ docker run -p 8000:8000 --env-file .env voteguide-backend
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/` | GET | API status and feature list |
-| `/health` | GET | Health check |
-| `/chat` | POST | Main chat (agent + RAG + multi-language + mode) |
+| `/` | GET | API status, version, and feature list |
+| `/health` | GET | Deep health check (RAG status, uptime) |
+| `/chat` | POST | Main chat (3-layer agent + RAG + multi-language) |
+| `/chat/stream` | POST | SSE streaming chat (token-by-token delivery) |
 | `/eligibility` | POST | Check voting eligibility by country/age/citizenship |
-| `/timeline/{country}` | GET | Election timelines for a country |
 | `/countries` | GET | List supported countries with metadata |
+| `/timeline/{country}` | GET | Election timelines for a country |
 | `/registration/{country}` | GET | Voter registration guide |
+| `/api/translate` | POST | Google Cloud Translation proxy |
+| `/api/stt` | POST | Google Cloud Speech-to-Text proxy |
+| `/api/tts` | POST | Google Cloud Text-to-Speech proxy |
 
 ### Chat Request Schema
 
@@ -374,12 +397,14 @@ docker run -p 8000:8000 --env-file .env voteguide-backend
 
 ## 🔐 Security
 
-- **Rate Limiting** — 20 requests/minute per IP (in-memory sliding window)
-- **Input Validation** — Pydantic models validate all request bodies with `Field(max_length=4000)`
+- **Rate Limiting** — 20 requests/minute per IP (sliding window, `middleware.py`)
+- **Input Sanitization** — Regex-based prompt injection detection blocks adversarial inputs (`middleware.py`)
+- **Input Validation** — Pydantic models validate all request bodies with `Field(max_length=4000)` (`models.py`)
+- **Request Tracing** — Every request gets `X-Request-ID` + `X-Response-Time` headers (`middleware.py`)
 - **CORS** — Whitelisted origins only; Firebase Hosting domains allowed via regex
 - **Non-partisan Guardrails** — System prompt explicitly prohibits political bias or candidate promotion
-- **Prompt Injection Defense** — RAG context is clearly delimited and labelled
-- **Firestore Rules** — Create-only writes with field validation (role must be `user`/`assistant`, content < 10,000 chars); no updates or deletes
+- **Prompt Injection Defense** — 7 compiled regex patterns block injection attempts (DAN mode, jailbreak, instruction override)
+- **Firestore Rules** — Create-only writes with field validation; no updates or deletes
 - **No PII Storage** — Only session ID (UUID) and chat content stored; no user authentication required
 - **Server-side API keys** — All Google Cloud API calls are proxied through the backend; keys never exposed to the browser
 
